@@ -38,23 +38,9 @@ message nsbm {
     Manifest manifest = 1;
 
     message Metadata {
-        enum AddressType {
-            INT = 0;
-            STR = 1;
-        }
-        AddressType addr_type = 1;
-
-        oneof src {
-            string src_id = 2;
-            fixed32 src_addr = 3;
-        }
-
-        oneof dest {
-            string dest_id = 4;
-            fixed32 dest_addr = 5;
-        }
-
-        int32 payload_size = 6;
+        string src_id = 1;
+        string dest_id = 2;
+        int32 payload_size = 3;
     }
     Metadata metadata = 2;
 
@@ -64,10 +50,15 @@ message nsbm {
             PUSH = 1;
         }
         SystemMode sys_mode = 1;
-        bool use_db = 2;
-        string db_address = 3;
-        int32 db_port = 4;
-        int32 db_num = 5;
+        enum SimulatorMode {
+            SYSTEM_WIDE = 0;
+            PER_NODE = 1;
+        }
+        SimulatorMode sim_mode = 2;
+        bool use_db = 3;
+        string db_address = 4;
+        int32 db_port = 5;
+        int32 db_num = 6;
     }
 
     message IntroDetails {

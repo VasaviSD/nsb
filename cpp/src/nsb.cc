@@ -1,11 +1,14 @@
 // nsb.cc
 
-#include "nsb_client.h"
+#include "nsb.h"
 
 namespace nsb {
-    SocketInterface::SocketInterface(const std::string& serverAddress, int serverPort)
+
+    SocketInterface::SocketInterface(std::string serverAddress, int serverPort)
         : serverAddress(serverAddress), serverPort(serverPort) {
-            connectToServer(SERVER_CONNECTION_TIMEOUT);
+            if (connectToServer(SERVER_CONNECTION_TIMEOUT) != 0) {
+                exit(EXIT_FAILURE);
+            }
         }
 
     SocketInterface::~SocketInterface() {
@@ -157,52 +160,98 @@ namespace nsb {
             return receiveMessage(channel, timeout);
         });
     }
-}
 
-int testSocketInterface() {
-    using namespace nsb;
-    // Testing
-    LOG(INFO) << "Creating socket interface..." << std::endl;
-    SocketInterface sif = SocketInterface("127.0.0.1", 65432);
-    LOG(INFO) << "Sending a message..." << std::endl;
-    sif.sendMessage(Comms::Channel::CTRL, "hello");
-    LOG(INFO) << "Receiving a message..." << std::endl;
-    int timeout = 5;
-    std::future<std::string> futureResponse = sif.listenForMessage(Comms::Channel::CTRL, &timeout);
-    std::string response = futureResponse.get();
-    if (response.empty()) {
-        LOG(ERROR) << "\tNo response received." << std::endl;
-    } else {
-        LOG(INFO) << "\tReceived response: " << response << std::endl;
+    DBConnector::DBConnector(const std::string& clientIdentifier) : clientId(std::move(clientIdentifier)), plctr(0) {}
+    
+    DBConnector::~DBConnector() {}
+
+    RedisConnector::RedisConnector(const std::string& clientIdentifier, std::string& db_address, int db_port) : 
+        DBConnector(clientIdentifier), address(std::move(db_address)), port(db_port) {
+        // Connect to Redis.
+        if (connect()) {
+            LOG(INFO) << "RedisConnector initialized!" << std::endl;
+        }
     }
-    LOG(INFO) << "Disconnecting socket interace..." << std::endl;
-    sif.closeConnection();
-    LOG(INFO) << "Done!" << std::endl;
-    return 0;
-}
 
-int testRedisConnector() {
-    using namespace nsb;
-    // Testing Redis Connector
-    std::string thisAppId = "app1";
-    std::string thatAppId = "app2";
-    std::string redisServerAddr = "127.0.0.1";
-    RedisConnector thisConn = RedisConnector(thisAppId, redisServerAddr, 5050);
-    RedisConnector thatConn = RedisConnector(thatAppId, redisServerAddr, 5050);
-    std::string sendPayload = "hola mundo";
-    std::string key = thisConn.store(sendPayload);
-    std::string recvPayload = thatConn.checkOut(key);
-    DLOG(INFO) << "Payload sent: " << sendPayload << std::endl;
-    DLOG(INFO) << "Payload received: " << recvPayload << std::endl;
-    return 0;
-}
+    RedisConnector::~RedisConnector() {
+        // Close the connection if it is open.
+        if (isConnected()) {
+            disconnect();
+        }
+        LOG(INFO) << "RedisConnector shut down." << std::endl;
+    }
+    bool RedisConnector::isConnected() const {
+        // Check if the connection is open.
+        return context != nullptr && context->err == REDIS_OK;
+    }
+    bool RedisConnector::connect() {
+        // Connect to the database and check for errors.
+        context = redisConnect(address.c_str(), port);
+        if (context->err) {
+            LOG(ERROR) << context->errstr << std::endl;
+            return false;
+        }
+        return true;
+    }
+    void RedisConnector::disconnect() {
+        LOG(INFO) << "RedisConnector is gracefully disconnecting." << std::endl;
+        redisFree(context);
+    }
 
-int main() {
-    using namespace nsb;
-    // Set up logging.
-    NsbLogSink log_output = NsbLogSink();
-    absl::InitializeLog();
-    absl::log_internal::AddLogSink(&log_output);
-    // return testSocketInterface();
-    return testRedisConnector();
+    std::string RedisConnector::store(const std::string& value) {
+        // Check connection before carrying out operation.
+        if (!isConnected()) {
+            LOG(ERROR) << "Redis connection is not online. Cannot store payload." << std::endl;
+            return "";
+        }
+        // Store payload.
+        DLOG(INFO) << "Storing payload: " << value << std::endl;
+        std::string key = generatePayloadId();
+        redisReply* reply = (redisReply*)redisCommand(context, "SET %s %s", key.c_str(), value.c_str());
+        if (context->err) {
+            LOG(ERROR) << "(SET Error) " << context->errstr << std::endl;
+            return "";
+        }
+        DLOG(INFO) << "Payload stored. Reply: " << reply->str << std::endl;
+        return key;
+    }
+
+    std::string RedisConnector::checkOut(const std::string& key) {
+        // Check connection before carrying out operation.
+        if (!isConnected()) {
+            LOG(ERROR) << "Redis connection is not online. Cannot store payload." << std::endl;
+            return "";
+        }
+        // Retrieve and delete the payload.
+        DLOG(INFO) << "Retrieving payload with key:" << key << std::endl;
+        redisReply* reply = (redisReply*)redisCommand(context, "GETDEL %s", key.c_str());
+        // Check if found else return empty.
+        if (context->err) {
+            LOG(ERROR) << "(GETDEL Error) " << context->errstr << std::endl;
+            return std::string();
+        }
+        if (reply->type != REDIS_REPLY_NIL) {
+            return std::string(reply->str, reply->len);
+        } else {
+            LOG(ERROR) << "(GETDEL Error) Returned nil.";
+            return std::string();
+        }
+    }
+
+    std::string RedisConnector::peek(const std::string& key) {
+        // Check connection before carrying out operation.
+        if (!isConnected()) {
+            LOG(ERROR) << "Redis connection is not online. Cannot store payload." << std::endl;
+            return std::string();
+        }
+        // Get payload.
+        DLOG(INFO) << "Retrieving payload with key:" << key << std::endl;
+        redisReply* reply = (redisReply*)redisCommand(context, "GET %s", key.c_str());
+        if (reply->type != REDIS_REPLY_NIL) {
+            return std::string(reply->str, reply->len);
+        } else {
+            LOG(ERROR) << "(GET Error) Returned nil.";
+            return std::string();
+        }
+    }
 }

@@ -28,15 +28,17 @@ namespace nsb {
 
     void NSBDaemon::configure(std::string filename) {
         // Open YAML file.
-        YAML::Node config = YAML::LoadFile("config.yaml");
+        YAML::Node config = YAML::LoadFile(filename);
         // Check if the file is valid.
         if (config.IsNull()) {
             std::cerr << "Failed to load configuration file: " << filename << std::endl;
             return;
         }
         // Parse the configuration file.
-        int mode = config["system"]["mode"].as<int>();
-        cfg.SYSTEM_MODE = static_cast<Config::SystemMode>(mode);
+        int sys_mode = config["system"]["mode"].as<int>();
+        cfg.SYSTEM_MODE = static_cast<Config::SystemMode>(sys_mode);
+        int sim_mode = config["system"]["simulator_mode"].as<int>();
+        cfg.SIMULATOR_MODE = static_cast<Config::SimulatorMode>(sim_mode);
         cfg.USE_DB = config["database"]["use_db"].as<bool>();
         if (cfg.USE_DB) {
             cfg.DB_ADDRESS = config["database"]["db_address"].as<std::string>();
@@ -73,7 +75,7 @@ namespace nsb {
         // Create address.
         sockaddr_in server_addr{};
         server_addr.sin_family = AF_INET;
-        server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        server_addr.sin_addr.s_addr = inet_addr("0.0.0.0");
         server_addr.sin_port = htons(port);
         // Bind and listen on port.
         if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
@@ -223,7 +225,7 @@ namespace nsb {
                 r_manifest->set_op(nsb::nsbm::Manifest::PING);
                 r_manifest->set_og(nsb::nsbm::Manifest::DAEMON);
                 r_manifest->set_code(nsb::nsbm::Manifest::FAILURE);
-                response_required = true;
+                // response_required = true;
         }
         // Send response if required.
         if (response_required) {
@@ -236,14 +238,30 @@ namespace nsb {
     }
 
     void NSBDaemon::handle_init(nsb::nsbm* incoming_msg, nsb::nsbm* outgoing_msg, bool* response_required) {
+        bool success = false;
+        *response_required = false;
         LOG(INFO) << "Handling INIT message from client " 
                 << incoming_msg->intro().identifier() << "..." << std::endl;
         // Get client details.
         if (incoming_msg->has_intro()) {
             if (incoming_msg->manifest().og() == nsb::nsbm::Manifest::APP_CLIENT) {
-                client_lookup.emplace(incoming_msg->intro().identifier(), ClientDetails(incoming_msg, fd_lookup));
+                app_client_lookup.emplace(incoming_msg->intro().identifier(), ClientDetails(incoming_msg, fd_lookup));
+                success = true;
             } else if (incoming_msg->manifest().og() == nsb::nsbm::Manifest::SIM_CLIENT) {
-                sim = ClientDetails(incoming_msg, fd_lookup);
+                if (cfg.SIMULATOR_MODE == Config::SimulatorMode::PER_NODE) {
+                    // If per-node simulator mode, use the identifier as the key.
+                    sim_client_lookup.emplace(incoming_msg->intro().identifier(), ClientDetails(incoming_msg, fd_lookup));
+                    success = true;
+                } else if (cfg.SIMULATOR_MODE == Config::SimulatorMode::SYSTEM_WIDE) {
+                    // If system-wide simulator mode, check that there isn't already one.
+                    if (sim_client_lookup.size() > 0) {
+                        LOG(ERROR) << "\tSystem-wide simulator mode only allows for one simulator client." << std::endl;
+                    } else {
+                        // Use a generic key as it's not important.
+                        sim_client_lookup.emplace("simulator", ClientDetails(incoming_msg, fd_lookup));
+                        success = true;
+                    }
+                }
             } else {
                 LOG(ERROR) << "\tUnknown/unexpected originator." << std::endl;
                 return;
@@ -257,21 +275,23 @@ namespace nsb {
         nsb::nsbm::Manifest* out_manifest = outgoing_msg->mutable_manifest();
         out_manifest->set_op(nsb::nsbm::Manifest::INIT);
         out_manifest->set_og(nsb::nsbm::Manifest::DAEMON);
-        out_manifest->set_code(nsb::nsbm::Manifest::SUCCESS);
+        out_manifest->set_code(success ? nsb::nsbm::Manifest::SUCCESS : nsb::nsbm::Manifest::FAILURE);
         nsb::nsbm::ConfigParams* out_config = outgoing_msg->mutable_config();
         out_config->set_sys_mode(static_cast<nsb::nsbm::ConfigParams::SystemMode>(cfg.SYSTEM_MODE));
         out_config->set_use_db(cfg.USE_DB);
-        DLOG(INFO) << "\tReturning configuration: Mode " << nsb::nsbm::ConfigParams::SystemMode(out_config->sys_mode())
+        out_config->set_sim_mode(static_cast<nsb::nsbm::ConfigParams::SimulatorMode>(cfg.SIMULATOR_MODE));
+        LOG(INFO) << "\tReturning configuration: Mode " << nsb::nsbm::ConfigParams::SystemMode(out_config->sys_mode())
                 << " | Use DB? " << out_config->use_db() << std::endl;
         if (cfg.USE_DB) {
             out_config->set_db_address(cfg.DB_ADDRESS);
             out_config->set_db_port(cfg.DB_PORT);
             out_config->set_db_num(cfg.DB_NUM);
         }
-        DLOG(INFO) << "\tDatabase Address: " << cfg.DB_ADDRESS << " | Database Port: " << cfg.DB_PORT << std::endl;
+        LOG(INFO) << "\tDatabase Address: " << cfg.DB_ADDRESS << " | Database Port: " << cfg.DB_PORT << std::endl;
     }
 
     void NSBDaemon::handle_ping(nsb::nsbm* incoming_msg, nsb::nsbm* outgoing_msg, bool* response_required) {
+        LOG(INFO) << "Received PING from " << incoming_msg->metadata().src_id() << "." << std::endl;
         nsb::nsbm::Manifest* out_manifest = outgoing_msg->mutable_manifest();
         out_manifest->set_op(nsb::nsbm::Manifest::PING);
         out_manifest->set_og(nsb::nsbm::Manifest::DAEMON);
@@ -280,6 +300,7 @@ namespace nsb {
     }
 
     void NSBDaemon::handle_send(nsb::nsbm* incoming_msg, nsb::nsbm* outgoing_msg, bool* response_required) {
+        *response_required = false;
         LOG(INFO) << "Handling SEND message from client " 
                 << incoming_msg->intro().identifier() << " in ";
         if (cfg.SYSTEM_MODE == Config::SystemMode::PULL) {
@@ -312,17 +333,29 @@ namespace nsb {
             // Send to sim via RECV channel.
             fd_set write_fd;
             FD_ZERO(&write_fd);
-            FD_SET(sim.ch_RECV_fd, &write_fd);
+            // Select the target simulator if multiple simulator clients are used, else select the first and only one.
+            ClientDetails target_sim;
+            if (cfg.SIMULATOR_MODE == Config::SimulatorMode::SYSTEM_WIDE) {
+                // If system-wide simulator client, just get the only client in the lookup.
+                target_sim = sim_client_lookup.begin()->second;
+            } else if (cfg.SIMULATOR_MODE == Config::SimulatorMode::PER_NODE) {
+                // If per-node simulator client, use the source ID to specify the target sim.
+                target_sim = sim_client_lookup.at(incoming_msg->metadata().src_id());
+            } else {
+                LOG(ERROR) << "No simulator clients available to forward message." << std::endl;
+                return;
+            }
+            FD_SET(target_sim.ch_RECV_fd, &write_fd);
             // Check if the sim RECV channel is available.
             DLOG(INFO) << "Attempting to forward message to sim RECV channel (FD:" 
-                << sim.ch_RECV_fd << ")..." << std::endl;
-            if (select(sim.ch_RECV_fd + 1, nullptr, &write_fd, nullptr, nullptr) > 0) {
-                if (FD_ISSET(sim.ch_RECV_fd, &write_fd)) {
+                << target_sim.ch_RECV_fd << ")..." << std::endl;
+            if (select(target_sim.ch_RECV_fd + 1, nullptr, &write_fd, nullptr, nullptr) > 0) {
+                if (FD_ISSET(target_sim.ch_RECV_fd, &write_fd)) {
                     // Serialize the message and send it to the sim RECV channel.
                     std::size_t size = outgoing_msg->ByteSizeLong();
                     void* buffer = malloc(size);
                     outgoing_msg->SerializeToArray(buffer, size);
-                    send(sim.ch_RECV_fd, buffer, size, 0);
+                    send(target_sim.ch_RECV_fd, buffer, size, 0);
                     DLOG(INFO) << "\tForwarded message to sim RECV channel (" << size << " B)" << std::endl;
                     free(buffer);
                 }
@@ -333,43 +366,42 @@ namespace nsb {
     }
 
     void NSBDaemon::handle_fetch(nsb::nsbm* incoming_msg, nsb::nsbm* outgoing_msg, bool* response_required) {
-        LOG(INFO) << "Handling FETCH message from client " << incoming_msg->intro().identifier() << std::endl;
+        *response_required = false;
+        DLOG(INFO) << "Handling FETCH message on behalf of " << incoming_msg->metadata().src_id() << std::endl;
         MessageEntry fetched_message;
-        bool tried_to_fetch = false;
         // Check to see if source has been specified.
         if (incoming_msg->has_metadata()) {
             nsb::nsbm::Metadata in_metadata = incoming_msg->metadata();
             if (in_metadata.has_src_id()) {
-                // Indicate that fetch has been attempted.
-                tried_to_fetch = true;
                 // Search for the message in the buffer.
-                for (const auto& msg : tx_buffer) {
-                    if (msg.source == in_metadata.src_id()) {
-                        fetched_message = msg;
-                        break;
-                    }
+                auto it = std::find_if(tx_buffer.begin(), tx_buffer.end(),
+                          [&](const auto& msg) { return msg.source == in_metadata.src_id(); });
+                if (it != tx_buffer.end()) {
+                    fetched_message = *it;
+                    tx_buffer.erase(it);
+                }
+            } else {
+                // If source not specified, pop the next message in the queue.
+                if (!tx_buffer.empty()) {
+                    fetched_message = tx_buffer.front();
+                    tx_buffer.pop_front();
                 }
             }
         }
-        // If source not specified, pop the next message in the queue.
-        if (!tried_to_fetch) {
-            if (!tx_buffer.empty()) {
-                tried_to_fetch = true;
-                fetched_message = tx_buffer.front();
-                tx_buffer.pop_front();
-            }
+        if (fetched_message.exists()) {
+            DLOG(INFO) << "TX entry retrieved | " 
+                       << fetched_message.payload_size << " B | src: " 
+                       << fetched_message.source << " | dest: " 
+                       << fetched_message.destination << std::endl;
+            DLOG(INFO) << "\tPayload: " << fetched_message.payload_obj << std::endl;
         }
-        DLOG(INFO) << "TX entry retrieved | " 
-                << fetched_message.payload_size << " B | src: " 
-                << fetched_message.source << " | dest: " 
-                << fetched_message.destination << std::endl;
-        DLOG(INFO) << "\tPayload: " << fetched_message.payload_obj << std::endl;
+        
         // Prepare response.
         nsb::nsbm::Manifest* out_manifest = outgoing_msg->mutable_manifest();
         out_manifest->set_op(nsb::nsbm::Manifest::FETCH);
         out_manifest->set_og(nsb::nsbm::Manifest::DAEMON);
         // If message was found (MessageEntry populated), reply with message.
-        if (fetched_message.source != "") {
+        if (fetched_message.exists()) {
             out_manifest->set_code(nsb::nsbm::Manifest::MESSAGE);
             nsb::nsbm::Metadata* out_metadata = outgoing_msg->mutable_metadata();
             out_metadata->set_src_id(fetched_message.source);
@@ -384,6 +416,7 @@ namespace nsb {
     }
 
     void NSBDaemon::handle_post(nsb::nsbm* incoming_msg, nsb::nsbm* outgoing_msg, bool* response_required) {
+        *response_required = false;
         LOG(INFO) << "Handling POST message from client " 
                 << incoming_msg->intro().identifier() << " in ";
         if (cfg.SYSTEM_MODE == Config::SystemMode::PULL) {
@@ -418,7 +451,7 @@ namespace nsb {
             out_manifest->set_op(nsb::nsbm::Manifest::FORWARD);
             // Get the destination to forward to.
             std::string dest_id = incoming_msg->metadata().dest_id();
-            int target_fd = (client_lookup.find(dest_id) != client_lookup.end()) ? client_lookup[dest_id].ch_RECV_fd : -1;
+            int target_fd = (app_client_lookup.find(dest_id) != app_client_lookup.end()) ? app_client_lookup[dest_id].ch_RECV_fd : -1;
             // Send to sim via RECV channel.
             if (target_fd != -1) {
                 fd_set write_fd;
@@ -454,41 +487,40 @@ namespace nsb {
         LOG(INFO) << "Handling RECEIVE message from client " 
                 << incoming_msg->intro().identifier() << "." << std::endl;
         MessageEntry received_message;
-        bool fetched = false;
         // Check for destination.
         if (incoming_msg->has_metadata()) {
             nsb::nsbm::Metadata in_metadata = incoming_msg->metadata();
             if (in_metadata.has_dest_id()) {
-                fetched = true;
                 // Search for the message in the buffer.
-                for (const auto& msg : rx_buffer) {
-                    if (msg.destination == in_metadata.dest_id()) {
-                        received_message = msg;
-                        break;
-                    }
+                auto it = std::find_if(rx_buffer.begin(), rx_buffer.end(),
+                          [&](const auto& msg) { return msg.destination == in_metadata.dest_id(); });
+                if (it != rx_buffer.end()) {
+                    received_message = *it;
+                    rx_buffer.erase(it);
+                }
+            } else {
+                // If destination not specified, pop the next message in the queue.
+                if (!rx_buffer.empty()) {
+                    received_message = rx_buffer.front();
+                    rx_buffer.pop_front();
                 }
             }
         }
-        // Pop the next message in the queue.
-        if (!fetched) {
-            if (!rx_buffer.empty()) {
-                received_message = tx_buffer.front();
-                rx_buffer.pop_front();
-                fetched = true;
-            }
-        }
-        DLOG(INFO) << "RX entry retrieved | " 
+        if (received_message.exists()) {
+            DLOG(INFO) << "RX entry retrieved | " 
                 << received_message.payload_size << " B | src: " 
                 << received_message.source << " | dest: " 
                 << received_message.destination << "\n\tPayload: " 
                 << received_message.payload_obj << std::endl;
-
+        } else {
+            DLOG(INFO) << "No (matching) entries found." << std::endl;
+        }
         // Prepare response.
         nsb::nsbm::Manifest* out_manifest = outgoing_msg->mutable_manifest();
         out_manifest->set_op(nsb::nsbm::Manifest::RECEIVE);
         out_manifest->set_og(nsb::nsbm::Manifest::DAEMON);
         // If message was found (MessageEntry populated), reply with message.
-        if (received_message.source != "") {
+        if (received_message.exists()) {
             out_manifest->set_code(nsb::nsbm::Manifest::MESSAGE);
             nsb::nsbm::Metadata* out_metadata = outgoing_msg->mutable_metadata();
             out_metadata->set_src_id(received_message.source);
@@ -520,15 +552,25 @@ namespace nsb {
  * 
  * @return int 
  */
-int main() {
+int main(int argc, char *argv[]) {
     using namespace nsb;
     // Set up logging.
     NsbLogSink log_output = NsbLogSink();
     absl::InitializeLog();
     absl::log_internal::AddLogSink(&log_output);
+    // Check argument.
+    if (argc != 2) {
+        LOG(ERROR) << "Usage: " << argv[0] << " <config_file>" << std::endl;
+        return 1;
+    }
+    // Check if the provided config file exists.
+    if (access(argv[1], F_OK) == -1) {
+        LOG(ERROR) << "Configuration file does not exist: " << argv[1] << std::endl;
+        return 1;
+    }
     // Start daemon.
     LOG(INFO) << "Starting daemon...\n";
-    NSBDaemon daemon = NSBDaemon(65432, "config.yaml");
+    NSBDaemon daemon = NSBDaemon(65432, argv[1]);
     daemon.start();
     daemon.stop();
     LOG(INFO) << "Exit.";

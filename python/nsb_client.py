@@ -14,7 +14,7 @@ import redis
 import random
 
 ## @cond
-logging.basicConfig(level=logging.DEBUG,
+logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s.%(msecs)03d\t%(name)s\t%(levelname)s\t%(message)s',
                     datefmt='%H:%M:%S',
                     handlers=[logging.StreamHandler(),])
@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.DEBUG,
 
 """
 @file nsb_client.py
-@namespace nsb_client
+@module nsb_client
 @brief Application & Simulator Client Interfaces for NSB
 @details Interfaces to facilitate communication with the NSB Daemon to 
          facilitate independent applications' payloads being routed through 
@@ -59,16 +59,39 @@ class Config:
         """
         @brief Denotes whether the NSB system is in *PUSH* or *PULL* mode.
 
-        *PULL* mode requires clients to request -- or pull -- to fetch or 
-        receive incoming payloads via the daemon server's response. *PUSH* mode 
-        denotes that when clients send or post outgoing payloads, they are 
-        immediately forwarded to the appropriate client.
+        In PULL mode, the NSB clients will poll the daemon server to fetch or 
+        receive messages. This is recommended for most configurations. In PUSH
+        mode, the NSB daemon server will automatically forward sent and posted 
+        messages to the receiving clients, such that they can be readily 
+        received or fetched without making a request to the server. This 
+        achieves better latency but may not work with all user device, program, 
+        and network configurations.
 
         @see NSBAppClient.receive()
         @see NSBSimClient.fetch()
         """
         PULL = 0
         PUSH = 1
+
+    class SimulatorMode(IntEnum):
+        """
+        @brief Denotes whether a system-wide (SYSTEM_WIDE) simulator client will
+        be used or multiple clients will be created, one per node (PER_NODE).
+
+        In SYSTEM_WIDE mode, it is assumed that there will only be one simulator 
+        client and creating multiple simulator clients will not be allowed. The 
+        simulator client will fetch all payloads to be transmitted. This is good
+        for top-down network simulator implementations like __ns-3__. In 
+        PER_NODE mode, it is assumed that each node in your network will have a
+        respective simulator client. These simulator clients must have the same 
+        identifier as their co-related application client, so that when an 
+        NSBAppClient with identifier "node0" sends a payload, it will be 
+        fetched by its corresponding NSBSimClient with identifier "node0", 
+        and vice-versa with posting and receiving payloads. This is good for 
+        bottom-up network simulator implementations like __OMNeT++__.
+        """
+        SYSTEM_WIDE = 0
+        PER_NODE = 1
 
     def __init__(self, nsb_msg: nsb_pb2.nsbm):
         """
@@ -80,6 +103,7 @@ class Config:
         @see NSBClient.initialize()
         """
         self.system_mode = Config.SystemMode(nsb_msg.config.sys_mode)
+        self.simulator_mode = Config.SimulatorMode(nsb_msg.config.sim_mode)
         self.use_db = nsb_msg.config.use_db
         if self.use_db:
             self.db_address = nsb_msg.config.db_address
@@ -94,6 +118,13 @@ class Config:
         if self.use_db:
             s += f" | DB Address: {self.db_address} | DB Port: {self.db_port}"
         return s
+    
+class MessageEntry:
+    def __init__(self, src_id, dest_id, payload):
+        self.src_id = src_id
+        self.dest_id = dest_id
+        self.payload = payload
+        self.payload_size = len(payload)
 
 ### COMMUNICATION INTERFACES ###
 
@@ -118,7 +149,7 @@ class SocketInterface(Comms):
     """
     @brief Socket interface for client-server communication.
 
-    This class implements aocket interface network to facilitate network 
+    This class implements socket interfacing to facilitate network 
     communication between NSB clients and the server. This can be used as a 
     template to develop other interfaces for client communication, which must 
     define the same methods with the same arguments as done in this class.
@@ -224,8 +255,8 @@ class SocketInterface(Comms):
         """
         @brief Receives a message from the server.
         
-        This method uses selectors to wait for the the channel socket to be 
-        ready before receiving up to RECEIVE_BUFFER SIZE bytes at a time, making 
+        This method uses selectors to wait for the channel socket to be 
+        ready before receiving up to RECEIVE_BUFFER_SIZE bytes at a time, making 
         it non-blocking compliant.
 
         @param channel The channel to send the message on (CTRL, SEND, or RECV).
@@ -249,12 +280,12 @@ class SocketInterface(Comms):
                     data += chunk
                     # If chunk is less than the buffer size, we're done.
                     if len(chunk) < RECEIVE_BUFFER_SIZE:
-                        return data
+                        return data if len(data) else None
                     # Otherwise, poll to see if there's more waiting.
                     else:
                         _fd, _, _ = select.select([self.conns[channel]], [], [], 0)
                         if not len(_fd):
-                            return data
+                            return data if len(data) else None
                 except socket.error as e:
                     print(f"Socket error: {e}")
                     return None
@@ -279,12 +310,12 @@ class SocketInterface(Comms):
                 data += chunk
                 # If chunk is less than the buffer size, we're done.
                 if len(chunk) < RECEIVE_BUFFER_SIZE:
-                    return data
+                    return data if len(data) else None
                 # Otherwise, poll to see if there's more waiting.
                 else:
                     _fd, _, _ = select.select([self.conns[channel]], [], [], 0)
                     if not len(_fd):
-                        return data
+                        return data if len(data) else None
             except socket.error as e:
                 print(f"Socket error: {e}")
                 return None
@@ -398,10 +429,15 @@ class RedisConnector(DBConnector):
         payload under that key.
 
         @param value The value (payload) to be stored.
+        @return The generated key the message was stored with.
         """
         key = self.generate_payload_id()
-        self.r.set(key, value)
-        return key
+        try:
+            self.r.set(key, value)
+            return key
+        except ConnectionError as e:
+            logging.error("Ensure that Redis server is online.")
+            raise e
 
     def check_out(self, key:str):
         """
@@ -412,12 +448,18 @@ class RedisConnector(DBConnector):
         in the final retrieval in the lifecycle of a payload.
 
         @param key The key to retrieve the payload from the Redis server.
+        @return The retrieved payload.
 
         @see NSBAppClient.receive()
         """
-        value = self.r.get(key)
-        self.r.delete(key)
-        return value
+        try:
+            value = self.r.getdel(key)
+            if isinstance(value, str):
+                value = value.encode('latin1')
+            return value
+        except ConnectionError as e:
+            logging.error("Ensure that Redis server is online.")
+            raise e
     
     def peek(self, key:str):
         """
@@ -429,10 +471,15 @@ class RedisConnector(DBConnector):
         accessible again later in the payload's lifetime.
 
         @param key The key to retrieve the payload from the Redis server.
+        @return The retrieved payload.
 
         @see NSBSimClient.fetch()
         """
-        return self.r.get(key)
+        try:
+            return self.r.get(key)
+        except ConnectionError as e:
+            logging.error("Ensure that Redis server is online.")
+            raise e
 
     def __del__(self):
         """
@@ -502,6 +549,9 @@ class NSBClient:
                 nsb_resp.ParseFromString(response)
                 # Check to see that message is of expected operation.
                 if nsb_resp.manifest.op == nsb_pb2.nsbm.Manifest.Operation.INIT:
+                    # Ensure initialization has succeeded, else raise error.
+                    if nsb_resp.manifest.code != nsb_pb2.nsbm.Manifest.OpCode.SUCCESS:
+                        raise RuntimeError(f"INIT: Initialization failed.")
                     # Get the configuration.
                     if nsb_resp.HasField('config'):
                         self.cfg = Config(nsb_resp)
@@ -509,6 +559,10 @@ class NSBClient:
                         # If database is specified, start it up.
                         if self.cfg.use_db:
                             self.db = RedisConnector(client_id, self.cfg.db_address, self.cfg.db_port)
+                            # Check connection.
+                            if not self.db.is_connected():
+                                logging.error("Ensure that the Redis server is running.")
+                                raise RuntimeError("Failed to connect to Redis database.")
                         return
         raise RuntimeError("Failed to initialize NSB client. No response from server or invalid response.")
 
@@ -613,10 +667,13 @@ class NSBAppClient(NSBClient):
         
         This method creates an NSB SEND message with the appropriate information 
         and payload and sends it to the daemon. It does not expect a response 
-        from the daemon.
+        from the daemon. If the system is using a database, it returns the key
+        to the stored message.
 
         @param dest_id The identifier of the destination NSB client.
         @param payload The payload to send to the destination.
+        @return str The key returned from storing the message, if database is
+                    used.
         """
         # Create and populate a SEND message.
         nsb_msg = nsb_pb2.nsbm()
@@ -625,19 +682,22 @@ class NSBAppClient(NSBClient):
         nsb_msg.manifest.og = self.og_indicator
         nsb_msg.manifest.code = nsb_pb2.nsbm.Manifest.OpCode.MESSAGE
         # Metadata.
-        nsb_msg.metadata.addr_type = nsb_pb2.nsbm.Metadata.AddressType.STR
         nsb_msg.metadata.src_id = self._id
         nsb_msg.metadata.dest_id = dest_id
         nsb_msg.metadata.payload_size = len(payload)
+        # Send message and retrieve key if necessary.
+        key = None
         if self.cfg.use_db:
             # If using databsae, store the payload and set the payload key.
-            nsb_msg.msg_key = self.db.store(payload)
+            key = self.db.store(payload)
+            nsb_msg.msg_key = key
         else:
             # If not using database, attach the payload.
             nsb_msg.payload = payload
         # Send NSB message to daemon.
         self.comms._send_msg(Comms.Channels.SEND, nsb_msg.SerializeToString())
         self.logger.info("SEND: Sent message + payload to server.")
+        return key
 
     def receive(self, dest_id:str|None=None, timeout:int|None=None):
         """
@@ -669,13 +729,14 @@ class NSBAppClient(NSBClient):
                        None denotes waiting indefinitely while 0 denotes polling
                        behavior.
 
-        @returns nsb_pb2.nsbm|None The NSB message containing the received 
+        @returns MessageEntry|None The MessageEntry struct containing the received 
                                    payload and metadata if a message is found, 
                                    otherwise None.
 
         @see Config.SystemMode
         @see SocketInterface._recv_msg()
         """
+        # Send a fetch message if system is in pull mode.
         if self.cfg.system_mode == Config.SystemMode.PULL:
             # Create and populate a FETCH message.
             nsb_msg = nsb_pb2.nsbm()
@@ -684,17 +745,21 @@ class NSBAppClient(NSBClient):
             nsb_msg.manifest.og = self.og_indicator
             nsb_msg.manifest.code = nsb_pb2.nsbm.Manifest.OpCode.SUCCESS
             # Metadata.
-            nsb_msg.metadata.addr_type = nsb_pb2.nsbm.Metadata.AddressType.STR
             if dest_id:
                 nsb_msg.metadata.dest_id = dest_id
             else:
                 nsb_msg.metadata.dest_id = self._id
             # Send the NSB message + payload.
             self.comms._send_msg(Comms.Channels.RECV, nsb_msg.SerializeToString())
-            self.logger.info("RECEIVE: Polling the server.")
+            self.logger.debug("RECEIVE: Polling the server.")
+        # If in PUSH mode, overwrite timeout to 0.
+        elif self.cfg.system_mode == Config.SystemMode.PUSH:
+            if timeout is not None and timeout != 0:
+                self.logger.debug("RECEIVE: System is in PUSH mode, timeout will be overwritten to 0.")
+            timeout = 0
         # Get response from request or just wait for message to come in.
         response = self.comms._recv_msg(Comms.Channels.RECV, timeout=timeout)
-        if len(response):
+        if response:
             # Parse in message.
             nsb_resp = nsb_pb2.nsbm()
             nsb_resp.ParseFromString(response)
@@ -705,16 +770,18 @@ class NSBAppClient(NSBClient):
                     if self.cfg.use_db:
                         # If using a database, retrieve the payload.
                         payload = self.db.check_out(nsb_resp.msg_key)
-                        nsb_resp.payload = payload
                     else:
                         payload = nsb_resp.payload
                     self.logger.info(f"RECEIVE: Received {nsb_resp.metadata.payload_size} " + \
                                         f"bytes from {nsb_resp.metadata.src_id} to " + \
                                         f"{nsb_resp.metadata.dest_id}: " + \
-                                        f"{payload}")
-                    return nsb_resp
+                                        f"({len(payload)}B)")
+                    # Pack the payload into a MessageEntry.
+                    return MessageEntry(src_id=nsb_resp.metadata.src_id,
+                                        dest_id=nsb_resp.metadata.dest_id,
+                                        payload=payload)
                 elif nsb_resp.manifest.code == nsb_pb2.nsbm.Manifest.OpCode.NO_MESSAGE:
-                    self.logger.info("RECEIVE: Yikes, no message.")
+                    self.logger.debug("RECEIVE: Yikes, no message.")
                     return None
         # If nothing, return None.
         return None
@@ -736,7 +803,7 @@ class NSBAppClient(NSBClient):
         """
         # Get response from request or just wait for message to come in.
         response = await self.comms._listen_msg(Comms.Channels.RECV)
-        if len(response):
+        if response:
             # Parse in message.
             nsb_resp = nsb_pb2.nsbm()
             nsb_resp.ParseFromString(response)
@@ -747,16 +814,18 @@ class NSBAppClient(NSBClient):
                     if self.cfg.use_db:
                         # If using a database, retrieve the payload.
                         payload = self.db.check_out(nsb_resp.msg_key)
-                        nsb_resp.payload = payload
                     else:
                         payload = nsb_resp.payload
-                    self.logger.info(f"RECEIVE: Received {nsb_resp.metadata.payload_size} " + \
+                    self.logger.info(f"LISTEN: Received {nsb_resp.metadata.payload_size} " + \
                                         f"bytes from {nsb_resp.metadata.src_id} to " + \
                                         f"{nsb_resp.metadata.dest_id}: " + \
-                                        f"{payload}")
-                    return nsb_resp
+                                        f"({len(payload)} B)")
+                    # Pack the payload into a MessageEntry.
+                    return MessageEntry(src_id=nsb_resp.metadata.src_id,
+                                        dest_id=nsb_resp.metadata.dest_id,
+                                        payload=payload)
                 elif nsb_resp.manifest.code == nsb_pb2.nsbm.Manifest.OpCode.NO_MESSAGE:
-                    self.logger.info("RECEIVE: Yikes, no message.")
+                    self.logger.info("LISTEN: Yikes, no message.")
                     return None
         # If nothing, return None.
         return None
@@ -788,7 +857,7 @@ class NSBSimClient(NSBClient):
         self.og_indicator = nsb_pb2.nsbm.Manifest.Originator.SIM_CLIENT
         self.initialize()
 
-    def fetch(self, src_id:str|None=None, timeout=None, get_payload=False):
+    def fetch(self, src_id:str|None=None, timeout=None):
         """
         @brief Fetches a payload that needs to be sent over the simulated 
                network.
@@ -797,8 +866,8 @@ class NSBSimClient(NSBClient):
         source. This method creates an NSB FETCH message with the appropriate 
         information and payload and sends it to the daemon. It will then get a 
         response that either contains a MESSAGE code and carries the fetched 
-        payload or contains a NO_MESSAGE code. If a message is found, the entire 
-        NSB message is returned to provide access to the metadata.
+        payload or contains a NO_MESSAGE code. If a message is found, the MessageEntry struct
+        is returned to provide access to both the payload and the metadata.
 
         @param src_id The identifier of the targe source. The default None value 
                will result in fetching the most recent message, regardless
@@ -806,12 +875,8 @@ class NSBSimClient(NSBClient):
         @param timeout The amount of time in seconds to wait to receive data. 
                None denotes waiting indefinitely while 0 denotes polling 
                behavior.
-        @param get_payload Whether or not to retrieve the payload. Setting this 
-                           to True enables passing the actual payload through 
-                           the simulated network. Setting this to False may 
-                           result in lower latency for the system.
 
-        @returns nsb_pb2.nsbm|None The NSB message containing the fetched 
+        @returns MessageEntry|None The MessageEntry struct containing the fetched 
                                    payload and metadata if a message is found, 
                                    otherwise None.
         """
@@ -823,15 +888,27 @@ class NSBSimClient(NSBClient):
             nsb_msg.manifest.og = self.og_indicator
             nsb_msg.manifest.code = nsb_pb2.nsbm.Manifest.OpCode.SUCCESS
             # Metadata.
-            if src_id:
-                nsb_msg.metadata.addr_type = nsb_pb2.nsbm.Metadata.AddressType.STR
-                nsb_msg.metadata.src_id = src_id
+            if self.cfg.simulator_mode == Config.SimulatorMode.SYSTEM_WIDE:
+                # If a target source was specified, specify it, else leave unspecified.
+                if src_id:
+                    nsb_msg.metadata.src_id = src_id
+            elif self.cfg.simulator_mode == Config.SimulatorMode.PER_NODE:
+                # Override or set source to local.
+                if not src_id:
+                    logging.warning("Simulation mode is set to PER_NODE, so specified target source" + \
+                                    "will be overwritten.")
+                nsb_msg.metadata.src_id = self._id
             # Send the NSB message + payload.
             self.comms._send_msg(Comms.Channels.RECV, nsb_msg.SerializeToString())
             self.logger.info("FETCH: Sent fetch request to server.")
+        # If in PUSH mode, overwrite timeout to 0.
+        elif self.cfg.system_mode == Config.SystemMode.PUSH:
+            if timeout is not None and timeout != 0:
+                self.logger.warning("FETCH: System is in PUSH mode, timeout will be overwritten to 0.")
+            timeout = 0
         # Get response from request or await forwarded message.
         response = self.comms._recv_msg(Comms.Channels.RECV, timeout=timeout)
-        if len(response):
+        if response:
             # Parse in message.
             nsb_resp = nsb_pb2.nsbm()
             nsb_resp.ParseFromString(response)
@@ -840,16 +917,17 @@ class NSBSimClient(NSBClient):
                 if nsb_resp.manifest.code == nsb_pb2.nsbm.Manifest.OpCode.MESSAGE:
                     if self.cfg.use_db:
                         # If using a database, retrieve the payload.
-                        payload = self.db.peek(nsb_resp.msg_key)
-                        if get_payload:
-                            nsb_resp.payload = payload
+                        payload = self.db.check_out(nsb_resp.msg_key)
                     else:
                         payload = nsb_resp.payload
                     self.logger.info(f"FETCH: Got {nsb_resp.metadata.payload_size} " + \
                                         f"bytes from {nsb_resp.metadata.src_id} to " + \
                                         f"{nsb_resp.metadata.dest_id}: " + \
-                                        f"{payload}")
-                    return nsb_resp
+                                        f"({len(payload)})")
+                    # Pack the payload into a MessageEntry.
+                    return MessageEntry(src_id=nsb_resp.metadata.src_id,
+                                        dest_id=nsb_resp.metadata.dest_id,
+                                        payload=payload)
                 elif nsb_resp.manifest.code == nsb_pb2.nsbm.Manifest.OpCode.NO_MESSAGE:
                     print("FETCH: Yikes, no message.")
                     return None
@@ -880,7 +958,7 @@ class NSBSimClient(NSBClient):
         """
         # Get response from request or await forwarded message.
         response = await self.comms._listen_msg(Comms.Channels.RECV)
-        if len(response):
+        if response:
             # Parse in message.
             nsb_resp = nsb_pb2.nsbm()
             nsb_resp.ParseFromString(response)
@@ -889,23 +967,26 @@ class NSBSimClient(NSBClient):
                 if nsb_resp.manifest.code == nsb_pb2.nsbm.Manifest.OpCode.MESSAGE:
                     if self.cfg.use_db:
                         # If using a database, retrieve the payload.
-                        payload = self.db.peek(nsb_resp.msg_key)
+                        payload = self.db.check_out(nsb_resp.msg_key)
                     else:
                         payload = nsb_resp.payload
-                    self.logger.info(f"FETCH: Got {nsb_resp.metadata.payload_size} " + \
+                    self.logger.info(f"LISTEN: Got {nsb_resp.metadata.payload_size} " + \
                                         f"bytes from {nsb_resp.metadata.src_id} to " + \
                                         f"{nsb_resp.metadata.dest_id}: " + \
-                                        f"{payload}")
-                    return nsb_resp
+                                        f"({len(payload)}B)")
+                    # Pack the payload into a MessageEntry.
+                    return MessageEntry(src_id=nsb_resp.metadata.src_id,
+                                        dest_id=nsb_resp.metadata.dest_id,
+                                        payload=payload)
                 elif nsb_resp.manifest.code == nsb_pb2.nsbm.Manifest.OpCode.NO_MESSAGE:
-                    print("FETCH: Yikes, no message.")
+                    print("LISTEN: Yikes, no message.")
                     return None
             else:
                 return None
         else:
             return None
         
-    def post(self, src_id:str, dest_id:str, payload_obj:bytes, payload_size:int, success:bool=True):
+    def post(self, src_id:str, dest_id:str, payload:bytes):
         """
         @brief Posts a payload to the specified destination via NSB.
         
@@ -921,19 +1002,17 @@ class NSBSimClient(NSBClient):
         @param success Whether the post was successful or not. If False, 
                        it will set the OpCode to NO_MESSAGE.
         """
-        # Create and populate a SEND message.
+        # Create and populate a POST message.
         nsb_msg = nsb_pb2.nsbm()
         # Manifest.
         nsb_msg.manifest.op = nsb_pb2.nsbm.Manifest.Operation.POST
         nsb_msg.manifest.og = self.og_indicator
-        nsb_msg.manifest.code = nsb_pb2.nsbm.Manifest.OpCode.MESSAGE if success else \
-            nsb_pb2.nsbm.Manifest.OpCode.NO_MESSAGE
+        nsb_msg.manifest.code = nsb_pb2.nsbm.Manifest.OpCode.MESSAGE
         # Metadata.
-        nsb_msg.metadata.addr_type = nsb_pb2.nsbm.Metadata.AddressType.STR
         nsb_msg.metadata.src_id = src_id
         nsb_msg.metadata.dest_id = dest_id
-        nsb_msg.metadata.payload_size = payload_size
-        self.msg_set_payload_obj(payload_obj, nsb_msg)
+        nsb_msg.metadata.payload_size = len(payload)
+        self.msg_set_payload_obj(payload, nsb_msg)
         # Send the NSB message + payload.
         self.comms._send_msg(Comms.Channels.SEND, nsb_msg.SerializeToString())
         self.logger.info("POST: Posted message + payload to server.")
