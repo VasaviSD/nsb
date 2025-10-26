@@ -12,6 +12,7 @@ import threading
 import redis
 
 import random
+from typing import Optional
 
 ## @cond
 logging.basicConfig(level=logging.INFO,
@@ -251,7 +252,7 @@ class SocketInterface(Comms):
         else:
             self.logger.error("Socket not ready to send, cannot send message.")
 
-    def _recv_msg(self, channel:Comms.Channels, timeout:int|None=None):
+    def _recv_msg(self, channel:Comms.Channels, timeout:Optional[int]=None):
         """
         @brief Receives a message from the server.
         
@@ -699,7 +700,7 @@ class NSBAppClient(NSBClient):
         self.logger.info("SEND: Sent message + payload to server.")
         return key
 
-    def receive(self, dest_id:str|None=None, timeout:int|None=None):
+    def receive(self, dest_id:Optional[str]=None, timeout:Optional[int]=None):
         """
         @brief Receives a payload via NSB.
 
@@ -857,7 +858,7 @@ class NSBSimClient(NSBClient):
         self.og_indicator = nsb_pb2.nsbm.Manifest.Originator.SIM_CLIENT
         self.initialize()
 
-    def fetch(self, src_id:str|None=None, timeout=None):
+    def fetch(self, src_id:Optional[str]=None, timeout=None):
         """
         @brief Fetches a payload that needs to be sent over the simulated 
                network.

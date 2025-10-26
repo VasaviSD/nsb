@@ -175,3 +175,14 @@ target_include_directories(nsb_test PUBLIC
     ${Protobuf_INCLUDE_DIRS}
     ${YAML_CPP_INCLUDE_DIR}
 )
+
+# Suppress Clang-specific nullability-extension warning which can be emitted
+# by protobuf-generated sources (these use Clang nullability annotations).
+# The project enables -Werror globally, so treat this as a safe, targeted
+# suppression for Clang/AppleClang only on the targets that build generated
+# protobuf code.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
+    target_compile_options(nsb PRIVATE "-Wno-nullability-extension")
+    target_compile_options(nsb_daemon PRIVATE "-Wno-nullability-extension")
+    target_compile_options(nsb_test PRIVATE "-Wno-nullability-extension")
+endif()
