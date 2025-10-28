@@ -1,0 +1,9 @@
+system:
+  daemon_address: 127.0.0.1
+  daemon_port: 65432
+  mode: 0             # 0=PULL, 1=PUSH
+  simulator_mode: 1   # 0=system-wide, 1=per-node
+  log_level: info
+
+database:
+  use_db: false
