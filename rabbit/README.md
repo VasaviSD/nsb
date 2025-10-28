@@ -253,9 +253,3 @@ print(f"Received: {received.payload if received else 'Nothing'}")
 app.exit()
 sim.exit()
 ```
-
-## References
-
-- Original socket-based implementation: `/Users/alex/Desktop/Code/nsb/python/nsb_client.py`
-- NSB Protobuf definitions: `proto/nsb_pb2.py`
-- RabbitMQ Documentation: https://www.rabbitmq.com/documentation.html
