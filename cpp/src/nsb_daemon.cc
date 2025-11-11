@@ -302,7 +302,7 @@ namespace nsb {
     void NSBDaemon::handle_send(nsb::nsbm* incoming_msg, nsb::nsbm* outgoing_msg, bool* response_required) {
         *response_required = false;
         LOG(INFO) << "Handling SEND message from client " 
-                << incoming_msg->intro().identifier() << " in ";
+                << incoming_msg->intro().identifier() << " in " << std::endl;
         if (cfg.SYSTEM_MODE == Config::SystemMode::PULL) {
             LOG(INFO).NoPrefix() << "PULL mode..." << std::endl;
             // Parse the metadata.
@@ -418,7 +418,7 @@ namespace nsb {
     void NSBDaemon::handle_post(nsb::nsbm* incoming_msg, nsb::nsbm* outgoing_msg, bool* response_required) {
         *response_required = false;
         LOG(INFO) << "Handling POST message from client " 
-                << incoming_msg->intro().identifier() << " in ";
+                << incoming_msg->intro().identifier() << " in " << std::endl;
         if (cfg.SYSTEM_MODE == Config::SystemMode::PULL) {
             LOG(INFO).NoPrefix() << "PULL mode..." << std::endl;
             // Check for message.
