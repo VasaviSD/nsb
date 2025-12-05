@@ -1,0 +1,36 @@
+NSB RabbitMQ C++ Get Started
+===========================
+
+Prerequisites (macOS/Homebrew)
+------------------------------
+1. Install dependencies (run once):
+   - `brew install rabbitmq-c`
+   - `brew install simple-amqp-client`
+   - Protobuf code is already generated under `cpp/proto`.
+2. Make sure RabbitMQ server is running (e.g., `brew services start rabbitmq`).
+
+Build
+-----
+```
+cd /Users/alex/Desktop/Code/nsb
+mkdir -p cpp/rabbit/build
+cd cpp/rabbit/build
+cmake ..
+make -j
+```
+
+Artifacts:
+- `libnsb_rabbitmq_cpp.a`
+- `example_send_recv`
+- `example_daemon`
+
+Run
+---
+1. Start RabbitMQ broker (if not already running).
+2. Start a daemon (choose one):
+   - Python (reference implementation): `python3 rabbit/nsb_daemon.py`
+   - C++ demo daemon: `./cpp/rabbit/build/example_daemon`
+3. In another terminal, run the send/recv sample:
+   - `./cpp/rabbit/build/example_send_recv`
+
+The sample will send "Hello from C++ sender" from `cpp_sender` to `cpp_receiver` and print the received payload.
