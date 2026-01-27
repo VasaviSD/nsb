@@ -284,10 +284,11 @@ namespace nsb {
             mutableManifest->set_op(nsb::nsbm::Manifest::FETCH);
             mutableManifest->set_og(*originIndicator);
             mutableManifest->set_code(nsb::nsbm::Manifest::SUCCESS);
+            nsb::nsbm::Metadata* mutableMetadata = nsbMsg->mutable_metadata();
             if (cfg.SIMULATOR_MODE == Config::SimulatorMode::SYSTEM_WIDE) {
                 if (srcId != nullptr) {
                     // If target source ID has been set, specify that. 
-                    nsbMsg->mutable_metadata()->set_src_id(*srcId);
+                    mutableMetadata->set_src_id(*srcId);
                 } // Otherwise, we can leave it unspecified.
             } else if (cfg.SIMULATOR_MODE == Config::SimulatorMode::PER_NODE) {
                 if (srcId != nullptr) {
@@ -295,7 +296,7 @@ namespace nsb {
                         << "Simulation mode is set to PER_NODE, so specified target source will be overwritten."
                         << std::endl;
                 }
-                nsbMsg->mutable_metadata()->set_src_id(clientId);
+                mutableMetadata->set_src_id(clientId);
             }
             // Send the message.
             DLOG(INFO) << "FETCH: Sending request:" << std::endl << nsbMsg->DebugString();
