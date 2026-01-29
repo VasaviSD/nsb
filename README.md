@@ -1,6 +1,6 @@
 # **nsb** – the network simulation bridge
 
-<table>
+<table border="0">
   <tr>
     <td width="30%" valign="top">
       <img src="media/logo.png" alt="NSB written in lowercase with a red-orange suspension bridge emerging from the top and a banana slug on the 'b'" title="NSB unofficial logo" width="100%">
