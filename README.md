@@ -1,16 +1,26 @@
-![NSB written in lowercase with a with a red-orange suspension bridge emerging from the top and a banana slug on the 'b'](media/logo.png "NSB unofficial logo")
-
 # **nsb** – the network simulation bridge
-_This tool is in beta and your feedback is greatly appreciated._
 
-The Network Simulation Bridge, or NSB for short, a simple, low-overhead pipeline
-consisting of a message server and client interface libraries that bridge 
-together applications and network simulators. NSB is application-, network 
-simulator-, and platform-agnostic that allows developers to integrate any 
-application front-end with any network simulator back-end.
-
-For more information, or to cite NSB, you can access our 
-[publication](https://dl.acm.org/doi/10.1145/3616391.3622771).
+<table>
+  <tr>
+    <td width="30%" valign="top">
+      <img src="media/logo.png" alt="NSB written in lowercase with a red-orange suspension bridge emerging from the top and a banana slug on the 'b'" title="NSB unofficial logo" width="100%">
+    </td>
+    <td width="70%">
+      <em>This tool is in beta and your feedback is greatly appreciated.</em>
+      <p>
+        The Network Simulation Bridge, or NSB for short, a simple, low-overhead pipeline
+        consisting of a message server and client interface libraries that bridge 
+        together applications and network simulators. NSB is application-, network 
+        simulator-, and platform-agnostic that allows developers to integrate any 
+        application front-end with any network simulator back-end.
+      </p>
+      <p>
+        For more information, or to cite NSB, you can access our 
+        <a href="https://dl.acm.org/doi/10.1145/3616391.3622771">publication</a>.
+      </p>
+    </td>
+  </tr>
+</table>
 
 ## Installation
 
