@@ -1,3 +1,5 @@
+![NSB written in lowercase with a with a red-orange suspension bridge emerging from the top and a banana slug on the 'b'](media/logo.png "NSB unofficial logo")
+
 # **nsb** – the network simulation bridge
 _This tool is in beta and your feedback is greatly appreciated._
 
