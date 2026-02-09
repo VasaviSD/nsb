@@ -21,10 +21,14 @@ import pika.exceptions
 import proto.nsb_pb2 as nsb_pb2
 
 # Set up logging
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s.%(msecs)03d\t%(name)s\t%(levelname)s\t%(message)s',
-                    datefmt='%H:%M:%S',
-                    handlers=[logging.StreamHandler(),])
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s.%(msecs)03d\t%(name)s\t%(levelname)s\t%(message)s",
+    datefmt="%H:%M:%S",
+    handlers=[
+        logging.StreamHandler(),
+    ],
+)
 
 logger = logging.getLogger("NSBDaemon")
 
@@ -36,12 +40,20 @@ DAEMON_RESPONSE_TIMEOUT = 600
 class NSBDaemonConfig:
     """
     @brief Configuration for the NSB Daemon.
-    
+
     This class holds the system-wide configuration that will be sent to
     clients upon their initialization.
     """
-    def __init__(self, sys_mode: int = 0, sim_mode: int = 0, use_db: bool = False,
-                 db_address: str = "localhost", db_port: int = 6379, db_num: int = 0):
+
+    def __init__(
+        self,
+        sys_mode: int = 0,
+        sim_mode: int = 0,
+        use_db: bool = False,
+        db_address: str = "localhost",
+        db_port: int = 6379,
+        db_num: int = 0,
+    ):
         """
         @brief Initializes daemon configuration.
 
@@ -79,7 +91,7 @@ class NSBDaemonConfig:
 class NSBDaemon:
     """
     @brief NSB Daemon for RabbitMQ-based configuration management.
-    
+
     This daemon runs as a separate service and listens for INIT requests from
     NSB clients. When a client sends an INIT message, the daemon responds with
     the system-wide configuration. The daemon also handles PING and EXIT messages.
@@ -97,11 +109,11 @@ class NSBDaemon:
         self.broker_port = broker_port
         self.config = config
         self.logger = logging.getLogger(f"NSBDaemon({broker_address}:{broker_port})")
-        
+
         self._connection = None
         self._channel = None
         self._running = False
-        
+
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -121,24 +133,34 @@ class NSBDaemon:
 
         @exception RuntimeError Raised if connection fails
         """
-        self.logger.info(f"Connecting to broker@{self.broker_addr}:{self.broker_port}...")
-        
+        self.logger.info(
+            f"Connecting to broker@{self.broker_addr}:{self.broker_port}..."
+        )
+
         try:
             params = pika.ConnectionParameters(
                 host=self.broker_addr,
                 port=self.broker_port,
                 connection_attempts=3,
-                retry_delay=1
+                retry_delay=1,
             )
             self._connection = pika.BlockingConnection(params)
             self._channel = self._connection.channel()
-            
-            # Declare exchange and config queues
-            self._channel.exchange_declare(exchange="nsb", exchange_type="direct", durable=True)
-            self._channel.queue_declare(queue="nsb.config.request", durable=True)
-            self._channel.queue_bind(exchange="nsb", queue="nsb.config.request", routing_key="nsb.config.request")
-            
-            self.logger.info("Connected to broker and config queue established.")
+
+            # Declare exchange and config queue
+            queue_name = "nsb.config.request"
+
+            self._channel.exchange_declare(
+                exchange="nsb", exchange_type="direct", durable=True
+            )
+            self._channel.queue_declare(queue=queue_name, durable=True)
+            self._channel.queue_bind(
+                exchange="nsb",
+                queue=queue_name,
+                routing_key=queue_name,
+            )
+
+            self.logger.info(f"Connected to broker and config queue established.")
         except pika.exceptions.AMQPConnectionError as e:
             self.logger.error(f"Failed to connect to broker: {e}")
             raise RuntimeError(f"Failed to connect to RabbitMQ broker: {e}")
@@ -151,13 +173,13 @@ class NSBDaemon:
         @param response_queue The queue to send the response to
         """
         self.logger.info(f"Handling INIT request from {client_id}")
-        
+
         # Create response message
         response = nsb_pb2.nsbm()
         response.manifest.op = nsb_pb2.nsbm.Manifest.Operation.INIT
         response.manifest.og = nsb_pb2.nsbm.Manifest.Originator.DAEMON
         response.manifest.code = nsb_pb2.nsbm.Manifest.OpCode.SUCCESS
-        
+
         # Populate config
         response.config.sys_mode = self.config.sys_mode
         response.config.sim_mode = self.config.sim_mode
@@ -166,14 +188,14 @@ class NSBDaemon:
             response.config.db_address = self.config.db_address
             response.config.db_port = self.config.db_port
             response.config.db_num = self.config.db_num
-        
+
         # Send response to client's config response queue
         try:
             self._channel.basic_publish(
                 exchange="nsb",
                 routing_key=response_queue,
                 body=response.SerializeToString(),
-                properties=pika.BasicProperties(delivery_mode=2)
+                properties=pika.BasicProperties(delivery_mode=2),
             )
             self.logger.info(f"Sent INIT response to {client_id}")
         except Exception as e:
@@ -187,20 +209,20 @@ class NSBDaemon:
         @param response_queue The queue to send the response to
         """
         self.logger.debug(f"Handling PING request from {client_id}")
-        
+
         # Create response message
         response = nsb_pb2.nsbm()
         response.manifest.op = nsb_pb2.nsbm.Manifest.Operation.PING
         response.manifest.og = nsb_pb2.nsbm.Manifest.Originator.DAEMON
         response.manifest.code = nsb_pb2.nsbm.Manifest.OpCode.SUCCESS
-        
+
         # Send response
         try:
             self._channel.basic_publish(
                 exchange="nsb",
                 routing_key=response_queue,
                 body=response.SerializeToString(),
-                properties=pika.BasicProperties(delivery_mode=2)
+                properties=pika.BasicProperties(delivery_mode=2),
             )
             self.logger.debug(f"Sent PING response to {client_id}")
         except Exception as e:
@@ -226,10 +248,10 @@ class NSBDaemon:
             # Parse the message
             msg = nsb_pb2.nsbm()
             msg.ParseFromString(body)
-            
+
             client_id = msg.intro.identifier
             response_queue = f"nsb.config.response.{client_id}"
-            
+
             # Handle based on operation
             if msg.manifest.op == nsb_pb2.nsbm.Manifest.Operation.INIT:
                 self._handle_init(client_id, response_queue)
@@ -246,23 +268,23 @@ class NSBDaemon:
         """
         @brief Starts the daemon and begins listening for client requests.
         """
+        self._connect()
+        self._running = True
+
+        queue_name = "nsb.config.request"
+
+        self.logger.info("NSB Daemon started. Listening for client requests...")
+
         try:
-            self._connect()
-            self._running = True
-            self.logger.info("NSB Daemon started. Listening for client requests...")
-            
-            # Set up consumer
-            self._channel.basic_qos(prefetch_count=1)
+            # Start consuming messages
             self._channel.basic_consume(
-                queue="nsb.config.request",
+                queue=queue_name,
                 on_message_callback=self._on_message,
-                auto_ack=True
+                auto_ack=True,
             )
-            
-            # Start consuming
             self._channel.start_consuming()
         except KeyboardInterrupt:
-            self.logger.info("Daemon interrupted by user.")
+            self.logger.info("Received shutdown signal. Stopping daemon...")
             self.stop()
         except Exception as e:
             self.logger.error(f"Daemon error: {e}")
@@ -285,7 +307,7 @@ class NSBDaemon:
         """
         self.logger.info("Stopping NSB Daemon")
         self._running = False
-        
+
         try:
             if self._channel and self._channel.is_open:
                 self._channel.stop_consuming()
@@ -294,28 +316,92 @@ class NSBDaemon:
                 self._connection.close()
         except Exception as e:
             self.logger.error(f"Error stopping daemon: {e}")
-        
+
         self.logger.info("NSB Daemon stopped.")
 
 
 def main():
     """
     @brief Main entry point for the NSB Daemon.
-    
+
     This function creates a daemon with default configuration and starts it.
     You can customize the configuration by modifying the NSBDaemonConfig parameters.
     """
-    # Create configuration (customize as needed)
-    config = NSBDaemonConfig(
-        sys_mode=0,  # PULL mode
-        sim_mode=0,  # SYSTEM_WIDE mode
-        use_db=False,  # Disable database by default
-        db_address="localhost",
-        db_port=6379
+    import argparse
+
+    parser = argparse.ArgumentParser(description="NSB RabbitMQ Daemon")
+    parser.add_argument(
+        "--broker-host",
+        type=str,
+        default="localhost",
+        help="RabbitMQ broker host (default: localhost)",
     )
-    
+    parser.add_argument(
+        "--broker-port",
+        type=int,
+        default=5672,
+        help="RabbitMQ broker port (default: 5672)",
+    )
+    parser.add_argument(
+        "--mode",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help="System mode: 0=PULL, 1=PUSH (default: 0)",
+    )
+    parser.add_argument(
+        "--sim-mode",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help="Simulator mode: 0=SYSTEM_WIDE, 1=PER_NODE (default: 0)",
+    )
+    parser.add_argument(
+        "--redis",
+        action="store_true",
+        default=True,
+        help="Enable Redis database (default: True)",
+    )
+    parser.add_argument(
+        "--no-redis",
+        action="store_false",
+        dest="redis",
+        help="Disable Redis database",
+    )
+    parser.add_argument(
+        "--redis-host",
+        type=str,
+        default="localhost",
+        help="Redis host (default: localhost)",
+    )
+    parser.add_argument(
+        "--redis-port",
+        type=int,
+        default=6379,
+        help="Redis port (default: 6379)",
+    )
+
+    args = parser.parse_args()
+
+    # Create configuration from arguments
+    config = NSBDaemonConfig(
+        sys_mode=args.mode,
+        sim_mode=args.sim_mode,
+        use_db=args.redis,
+        db_address=args.redis_host,
+        db_port=args.redis_port,
+    )
+
+    mode_name = "PULL" if args.mode == 0 else "PUSH"
+    logger.info(f"Starting NSB Daemon in {mode_name} mode")
+    logger.info(
+        f"Connecting to RabbitMQ broker at {args.broker_host}:{args.broker_port}"
+    )
+    if args.redis:
+        logger.info(f"Redis enabled at {args.redis_host}:{args.redis_port}")
+
     # Create and start daemon
-    daemon = NSBDaemon("localhost", 5672, config)
+    daemon = NSBDaemon(args.broker_host, args.broker_port, config)
     daemon.start()
 
 

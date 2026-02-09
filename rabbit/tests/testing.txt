@@ -1,0 +1,198 @@
+NSB Unified Client - Testing and Examples
+==========================================
+
+OVERVIEW
+--------
+This directory contains tests and examples for the unified NSB client that
+supports both socket and RabbitMQ backends with a runtime toggle.
+
+PREREQUISITES
+-------------
+1. Redis server (for database tests)
+   - Install: brew install redis (macOS) or apt-get install redis (Linux)
+   - Start: redis-server
+   - Default port: 6379
+   - Test connection: redis-cli ping (should return PONG)
+
+2. RabbitMQ broker (for RabbitMQ backend)
+   - Install/run: docker run -d --name rabbitmq-4-1 -p 5672:5672 -p 15672:15672 rabbitmq:4.1-management
+   - Default port: 5672
+   - Management UI: http://localhost:15672 (login: guest/guest)
+
+3. NSB daemons
+   - RabbitMQ daemon: connects to broker on port 5672 (REQUIRED)
+     Configure with --mode 0 (PULL) or --mode 1 (PUSH)
+   - Socket daemon (PULL mode): port 5555 (optional, C++ daemon - DISABLED BY DEFAULT)
+   - Socket daemon (PUSH mode): port 5556 (optional, C++ daemon - DISABLED BY DEFAULT)
+   
+   Note: Run ONE RabbitMQ daemon at a time. Tests will automatically skip PULL or PUSH
+         tests based on the daemon's configured mode.
+   Note: Socket tests are DISABLED by default since the socket daemon requires building
+         the C++ NSB project. To enable socket tests: export ENABLE_SOCKET_TESTS=true
+
+4. Python dependencies
+   - cd /Users/alex/Desktop/Code/nsb/rabbit
+   - pip install -r requirements.txt
+
+REDIS SETUP
+-----------
+Quick start for Redis:
+
+1. Install Redis:
+   macOS:  brew install redis
+   Linux:  sudo apt-get install redis-server
+
+2. Start Redis server:
+   redis-server
+
+   Or on specific port:
+   redis-server --port 6379
+
+3. Verify Redis is running:
+   redis-cli ping
+   (should return: PONG)
+
+4. Enable Redis in NSB daemon configuration:
+   Edit daemon config to set use_db=True, db_address="localhost", db_port=6379
+
+RUNNING TESTS
+-------------
+Run tests (RabbitMQ only, socket tests disabled by default):
+  cd /Users/alex/Desktop/Code/nsb/rabbit/tests
+  python test_unified.py
+
+Run all tests including socket tests:
+  export ENABLE_SOCKET_TESTS=true
+  python test_unified.py
+
+Tests include:
+- Redis integration (socket + RabbitMQ backends)
+- PULL mode with latency benchmarks (socket vs RabbitMQ)
+- PUSH mode with latency benchmarks (socket vs RabbitMQ)
+- Backend switching and validation
+- Simulator client operations
+
+Test output shows:
+- [PASS] for successful tests
+- [FAIL] for failed tests
+- [SKIP] for skipped tests (missing prerequisites)
+- Benchmark results show average/min/max latency in milliseconds
+
+RUNNING EXAMPLES
+----------------
+Run all examples:
+  cd /Users/alex/Desktop/Code/nsb/rabbit/tests
+  python example_unified.py
+
+Examples demonstrate:
+1. Socket backend usage
+2. RabbitMQ backend usage
+3. Backend comparison
+4. Redis integration for large payloads
+5. PULL vs PUSH mode behavior
+6. Simulator client usage
+7. Environment-based backend selection
+
+Example output shows:
+- [OK] for successful operations
+- [FAIL] for failed operations
+- [SKIP] for skipped operations
+- [DONE] when example completes
+
+ENVIRONMENT VARIABLES
+---------------------
+You can configure backend via environment:
+  export NSB_BACKEND=rabbitmq
+  export NSB_SERVER=localhost
+  export NSB_PORT=5672
+
+Then in your code:
+  backend = os.environ.get("NSB_BACKEND", "socket")
+  app = nsb.NSBAppClient("myapp", "localhost", port, backend=backend)
+
+BENCHMARK RESULTS
+-----------------
+Tests measure round-trip latency for PULL and PUSH modes:
+- Socket PULL: typically 1-10ms average
+- RabbitMQ PULL: typically 5-20ms average
+- Socket PUSH: typically 1-10ms average
+- RabbitMQ PUSH: typically 5-20ms average
+
+Actual results depend on system load and network conditions.
+
+TROUBLESHOOTING
+---------------
+Redis connection failed:
+- Check Redis is running: redis-cli ping
+- Check port: netstat -an | grep 6379
+- Check daemon config has correct Redis settings
+
+RabbitMQ connection timeout:
+- Check RabbitMQ is running: rabbitmqctl status
+- Check port: netstat -an | grep 5672
+- Check firewall settings
+
+No messages received:
+- Verify daemons are running on correct ports
+- Check client IDs match between sender/receiver
+- Verify system mode (PULL vs PUSH) matches daemon config
+- Check timeout values are sufficient
+
+Test skipped:
+- Read skip message for missing prerequisite
+- Install/start required service (Redis, RabbitMQ, daemon)
+- Verify daemon configuration matches test requirements
+
+FILES
+-----
+test_unified.py     - Comprehensive test suite with benchmarks
+example_unified.py  - Usage examples for all features
+TESTING.txt         - This file
+
+QUICK START (RabbitMQ only)
+----------------------------
+1. Start Redis:
+   redis-server
+
+2. Start RabbitMQ (using Docker):
+   docker run -d --name rabbitmq-4-1 -p 5672:5672 -p 15672:15672 rabbitmq:4.1-management
+
+3. Start NSB RabbitMQ daemon:
+   cd /Users/alex/Desktop/Code/nsb/rabbit
+   
+   For PULL mode (default):
+   python3 nsb_daemon.py --mode 0
+   
+   OR for PUSH mode:
+   python3 nsb_daemon.py --mode 1
+   
+   Note: Run ONE daemon at a time. Tests will skip PULL or PUSH tests
+   based on the daemon's mode.
+
+4. Run tests (socket tests disabled by default):
+   cd /Users/alex/Desktop/Code/nsb/rabbit/tests
+   python3 test_unified.py
+
+5. Run examples:
+   cd /Users/alex/Desktop/Code/nsb/rabbit/tests
+   python3 example_unified.py
+
+SOCKET DAEMON (Optional - Disabled by Default)
+-----------------------------------------------
+The socket daemon is the C++ NSB daemon from the main project.
+Socket tests are DISABLED by default since most users only need RabbitMQ.
+
+To enable socket tests:
+
+1. Build the main NSB project:
+   cd /Users/alex/Desktop/Code/nsb
+   mkdir -p build && cd build
+   cmake ..
+   cmake --build .
+
+2. Run socket daemon:
+   ./bin/nsb_daemon ../config.yaml
+
+3. Enable socket tests:
+   export ENABLE_SOCKET_TESTS=true
+   python3 test_unified.py

@@ -67,9 +67,30 @@ if(SIMPLEAMQPCLIENT_LIBRARY_DIRS)
   link_directories(${SIMPLEAMQPCLIENT_LIBRARY_DIRS})
 endif()
 
+# hiredis (for Redis support in unified client)
+if(PKG_CONFIG_FOUND)
+  pkg_check_modules(HIREDIS QUIET hiredis)
+endif()
+if(NOT HIREDIS_FOUND)
+  find_path(HIREDIS_INCLUDE_DIRS hiredis/hiredis.h)
+  find_library(HIREDIS_LIBRARIES NAMES hiredis)
+endif()
+if(NOT HIREDIS_INCLUDE_DIRS OR NOT HIREDIS_LIBRARIES)
+  message(WARNING "hiredis not found — unified client will build without Redis support. Install via: brew install hiredis")
+  set(HIREDIS_INCLUDE_DIRS "")
+  set(HIREDIS_LIBRARIES "")
+endif()
+if(HIREDIS_INCLUDE_DIRS)
+  include_directories(${HIREDIS_INCLUDE_DIRS})
+endif()
+if(HIREDIS_LIBRARY_DIRS)
+  link_directories(${HIREDIS_LIBRARY_DIRS})
+endif()
+
 # Our headers
 include_directories(${RABBIT_DIR}/include)
 
+# ── RabbitMQ-only library (existing) ──
 add_library(nsb_rabbitmq_cpp
   ${PROTO_DIR}/nsb.pb.cc
   ${RABBIT_DIR}/src/RabbitMQInterface.cpp
@@ -87,6 +108,21 @@ target_link_libraries(nsb_rabbitmq_cpp
   absl::log_internal_message
 )
 
+# ── Unified library (socket + RabbitMQ backends) ──
+add_library(nsb_unified_cpp
+  ${PROTO_DIR}/nsb.pb.cc
+  ${RABBIT_DIR}/src/NSBUnified.cpp
+)
+
+target_link_libraries(nsb_unified_cpp
+  ${SIMPLEAMQPCLIENT_LIBRARIES}
+  ${RABBITMQ_C_LIBRARIES}
+  ${HIREDIS_LIBRARIES}
+  ${Protobuf_LIBRARIES}
+  absl::log_internal_check_op
+  absl::log_internal_message
+)
+
 # Examples
 add_executable(example_send_recv ${RABBIT_DIR}/examples/example_send_recv.cpp)
 target_link_libraries(example_send_recv nsb_rabbitmq_cpp)
@@ -94,5 +130,9 @@ target_link_libraries(example_send_recv nsb_rabbitmq_cpp)
 add_executable(example_daemon ${RABBIT_DIR}/examples/example_daemon.cpp)
 target_link_libraries(example_daemon nsb_rabbitmq_cpp)
 
+add_executable(example_unified ${RABBIT_DIR}/examples/example_unified.cpp)
+target_link_libraries(example_unified nsb_unified_cpp)
+
 message(STATUS "Using SimpleAmqpClient includes: ${SIMPLEAMQPCLIENT_INCLUDE_DIRS}")
 message(STATUS "Using rabbitmq-c includes: ${RABBITMQ_C_INCLUDE_DIRS}")
+message(STATUS "Using hiredis includes: ${HIREDIS_INCLUDE_DIRS}")

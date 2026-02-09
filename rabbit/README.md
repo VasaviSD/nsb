@@ -25,6 +25,11 @@ Unlike the socket-based implementation where the daemon acts as a message router
    - Handles PING and EXIT messages
    - Runs independently and can be started/stopped separately
 
+4. **Unified Client** (`nsb_unified.py`)
+   - Drop-in replacement that supports both socket and RabbitMQ backends
+   - Backend selected at runtime via the `backend` parameter (`"socket"` or `"rabbitmq"`)
+   - Identical API to the standalone clients — no code changes needed when switching backends
+
 ### Queue Architecture
 
 The implementation uses a topic-based routing scheme with the following queue naming convention:
@@ -106,7 +111,7 @@ Or run directly:
 python nsb_daemon.py
 ```
 
-### Creating an Application Client
+### Creating an Application Client (RabbitMQ-only module)
 
 ```python
 from nsb_rabbitmq import NSBAppClient
@@ -126,7 +131,7 @@ if msg:
 client.exit()
 ```
 
-### Creating a Simulator Client
+### Creating a Simulator Client (RabbitMQ-only module)
 
 ```python
 from nsb_rabbitmq import NSBSimClient
@@ -145,6 +150,30 @@ if msg:
 
 # Cleanup
 sim.exit()
+```
+
+### Using the Unified Client (recommended)
+
+The unified client (`nsb_unified.py`) lets you switch between socket and RabbitMQ backends with a single parameter:
+
+```python
+import nsb_unified as nsb
+
+# RabbitMQ backend
+app = nsb.NSBAppClient("app_node_0", "localhost", 5672, backend="rabbitmq")
+app.send("app_node_1", b"Hello, World!")
+msg = app.receive(timeout=5)
+app.exit()
+
+# Socket backend — same code, different backend
+app = nsb.NSBAppClient("app_node_0", "localhost", 5555, backend="socket")
+```
+
+You can also select the backend via environment variable:
+
+```bash
+export NSB_BACKEND=rabbitmq
+export NSB_PORT=5672
 ```
 
 ### Asynchronous Operations
@@ -192,6 +221,16 @@ config = NSBDaemonConfig(
 
 When enabled, large payloads are stored in Redis and only the key is transmitted via RabbitMQ.
 
+## Cross-Language Interoperability
+
+Python and C++ clients are **fully wire-compatible**. They use the same protobuf message format (`nsb.proto`) and the same RabbitMQ queue/exchange naming conventions (`nsb.{channel}.{client_id}`). This means:
+
+- A **Python `NSBAppClient`** can send messages to a **C++ `NSBAppClientRMQ`** (and vice versa) through the same broker.
+- Either the **Python daemon** (`nsb_daemon.py`) or the **C++ daemon** can serve INIT requests to clients of either language.
+- Client IDs must be unique across all languages sharing the same broker.
+
+See `cpp/rabbit/README.md` for C++ build instructions and API reference.
+
 ## Architecture Differences from Socket Implementation
 
 ### Similarities
@@ -225,7 +264,36 @@ pip install pika redis
 
 ## Testing
 
-Example test script:
+### Test Suite
+
+A comprehensive test suite is available in `tests/test_unified.py`. It covers Redis integration, PULL/PUSH modes, backend switching, simulator operations, and includes latency benchmarks.
+
+```bash
+# Start RabbitMQ broker and daemon first
+python3 nsb_daemon.py
+
+# Run tests (RabbitMQ backend; socket tests disabled by default)
+cd tests
+python3 test_unified.py
+```
+
+See `tests/testing.txt` for full prerequisites, environment variables, and troubleshooting.
+
+### Examples
+
+- **`example_usage.py`** — 5 standalone examples using the RabbitMQ-only module
+- **`tests/example_unified.py`** — 7 examples using the unified client with both backends
+
+```bash
+# Standalone RabbitMQ examples
+python3 example_usage.py
+
+# Unified client examples
+cd tests
+python3 example_unified.py
+```
+
+### Quick Inline Test
 
 ```python
 from nsb_rabbitmq import NSBAppClient, NSBSimClient

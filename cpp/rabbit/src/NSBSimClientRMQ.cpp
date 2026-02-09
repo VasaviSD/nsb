@@ -34,4 +34,26 @@ void NSBSimClientRMQ::post(const std::string& src_id, const std::string& dest_id
     comms_->send(ChannelKind::SEND, wire, dest_id);
 }
 
+void NSBSimClientRMQ::listen(MessageCallback callback) {
+    comms_->async_listen(ChannelKind::RECV, [callback](const std::string& wire) {
+        nsb::nsbm m;
+        if (!m.ParseFromString(wire)) return;
+        if (m.manifest().code() != nsb::nsbm::Manifest::MESSAGE) return;
+        MessageEntry entry;
+        entry.src_id  = m.metadata().src_id();
+        entry.dest_id = m.metadata().dest_id();
+        if (m.has_payload())
+            entry.payload = m.payload();
+        callback(entry);
+    });
+}
+
+void NSBSimClientRMQ::stop_listen() {
+    comms_->stop_listen();
+}
+
+bool NSBSimClientRMQ::is_listening() const {
+    return comms_->is_listening();
+}
+
 }

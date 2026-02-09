@@ -138,4 +138,51 @@ bool RabbitMQInterface::recv(ChannelKind ch, std::string& out, int timeout_secon
     }
 }
 
+void RabbitMQInterface::async_listen(ChannelKind ch, MessageCallback callback) {
+    if (listening_.load()) {
+        throw std::runtime_error("Already listening");
+    }
+    if (!chan_) {
+        throw std::runtime_error("RabbitMQ not connected");
+    }
+    listening_ = true;
+    listen_thread_ = std::thread(&RabbitMQInterface::listen_loop, this, ch, callback);
+}
+
+void RabbitMQInterface::stop_listen() {
+    if (!listening_.load()) return;
+    listening_ = false;
+    // The listen loop polls with timeout, so it will exit on next iteration
+    if (listen_thread_.joinable()) {
+        listen_thread_.join();
+    }
+}
+
+void RabbitMQInterface::listen_loop(ChannelKind ch, MessageCallback callback) {
+    const std::string q = queue_name(ch);
+    // no_local=true, no_ack=true, exclusive=false
+    listen_consumer_tag_ = chan_->BasicConsume(q, "", true, true, false);
+
+    while (listening_.load()) {
+        AmqpClient::Envelope::ptr_t env;
+        // Poll with 500ms timeout to allow checking listening_ flag
+        bool ok = chan_->BasicConsumeMessage(listen_consumer_tag_, env, 500);
+        if (ok && env) {
+            try {
+                callback(env->Message()->Body());
+            } catch (const std::exception& e) {
+                // Log but don't crash the listen loop
+                std::cerr << "Callback error: " << e.what() << std::endl;
+            }
+        }
+    }
+
+    try {
+        chan_->BasicCancel(listen_consumer_tag_);
+    } catch (...) {
+        // Ignore cancel errors on shutdown
+    }
+    listen_consumer_tag_.clear();
+}
+
 }

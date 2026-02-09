@@ -3,6 +3,9 @@
 #include <memory>
 #include <string>
 #include <chrono>
+#include <functional>
+#include <thread>
+#include <atomic>
 #include <SimpleAmqpClient/SimpleAmqpClient.h>
 
 namespace nsb {
@@ -13,6 +16,8 @@ enum class ChannelKind { CTRL,
 
 class RabbitMQInterface {
   public:
+    using MessageCallback = std::function<void(const std::string&)>;
+
     RabbitMQInterface(const std::string& host, int port, const std::string& client_id);
     ~RabbitMQInterface();
 
@@ -24,6 +29,11 @@ class RabbitMQInterface {
 
     // Receive one message body; timeout_seconds <0 => wait forever, 0 => poll once
     bool recv(ChannelKind ch, std::string& out, int timeout_seconds = 0);
+
+    // Async listen: spawns background thread, invokes callback on each message
+    void async_listen(ChannelKind ch, MessageCallback callback);
+    void stop_listen();
+    bool is_listening() const { return listening_.load(); }
 
     // Queue names
     std::string queue_name(ChannelKind ch) const;
@@ -39,7 +49,13 @@ class RabbitMQInterface {
     std::string q_send_;
     std::string q_recv_;
 
+    // Async listen state
+    std::atomic<bool> listening_{false};
+    std::thread       listen_thread_;
+    std::string       listen_consumer_tag_;
+
     void declare_exchange_and_queues();
+    void listen_loop(ChannelKind ch, MessageCallback callback);
 };
 
 }
