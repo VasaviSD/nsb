@@ -22,6 +22,16 @@
   </tr>
 </table>
 
+## Contact & Collaborate
+
+NSB was first created to address real research needs at the [Inter-Networking Research Group](https://inrg.engineering.ucsc.edu/) at the University of California, Santa Cruz. The first [proofs-of-concept](https://dl.acm.org/doi/abs/10.1145/3616391.3622771) that leveraged NSB included decentralized federated learning and autonomous vehicle platooning. While core development is active as of February 2026, we invite collaborators and users to help us in that process and to develop domain-specific and/or usage-specific solutions.
+
+[✉️ _**Contact us via email!**_](mailto:hkuttive@ucsc.edu) We look forward to helping you, hearing your feedback, or collaborating with you to make your network co-simulation successful.
+
+**Interested in using NSB to model your connected systems? Looking for features not currently implemented?** NSB was made to be extensible, but to identify what features we extend NSB with, we need to have motivating use cases. We'd love to work with new users/contributors to build simulation solutions together.
+
+**Working specifically on autonomous vehicles system modeling?** This project was co-created in part to model the network behind vehicle-to-vehicle (V2V) networking for autonomous vehicles (AVs). We are currently searching for users/collaborators to let us know what they'd like to see in terms of more support for AV applications and V2V and V2X network simulations.
+
 ## Installation
 
 ### Prerequisites
@@ -72,7 +82,7 @@ the _CMake_ build:
 ```cmake ..```
 
 Within the output, you should see something like this:
-```
+```shell
 [cmake] -- Checking target libraries:
 [cmake] -- ✓ Found target: yaml-cpp::yaml-cpp
 [cmake] -- ✓ Found target: protobuf::libprotobuf
@@ -85,10 +95,10 @@ Within the output, you should see something like this:
 ```
 If all the prerequisite software was installed, you may continue with building 
 and installing NSB.
-```
+```shell
 cmake --build . --clean-first
 ```
-```
+```shell
 cmake --install .
 ```
 The library, includes, and binary directories should now be available under
@@ -133,14 +143,14 @@ the application and simulator, respectively.
 In Python, the client interfaces are available via *nsb_client.py* which you 
 must import. We recommend copying the contents of the [_python_](python/) 
 directory, including the _proto_ folder, to your Python workspace.
-```
+```python
 import nsb_client as nsb
 ```
 In C++, the installed _libnsb.dylib_ comes with two headers – _nsb.h_ and 
 *nsb_client.h* – under the `nsb` namespace. Including *nsb_client.h* will give 
 you access to the client interfaces while *nsb.h* will provide access to more 
 general NSB logic.
-```
+```cpp
 #include "nsb.h"
 #include "nsb_client.h"
 ```
@@ -162,7 +172,7 @@ payloads via NSB. The `listen` method (not yet implemented in C++, sorry) is an
 asynchronous reception of incoming messages. 
 
 In Python:
-```
+```python
 nsb_app = nsb.NSBAppClient("node0", "127.0.0.1", 65432)
 
 ...
@@ -187,7 +197,7 @@ if incoming_payload:
 
 ```
 In C++:
-```
+```cpp
 ...
 
 const std::string client_id = "node0";
@@ -227,7 +237,7 @@ arrives at the destination node in the simulated network to allow the payload to
 be received at the receiving application client.
 
 In Python:
-```
+```python
 nsb_app = nsb.NSBSimClient("node0", "127.0.0.1", 65432)
 
 ...
@@ -251,7 +261,7 @@ nsb_app.post(payload, src_id, dest_id)
 
 ```
 In C++:
-```
+```cpp
 ...
 
 std::string daemon_address = "127.0.0.1";
