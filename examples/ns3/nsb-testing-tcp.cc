@@ -27,7 +27,7 @@ NS_LOG_COMPONENT_DEFINE("NSBTestingTCP");
 
 // ==================== CONFIGURATION CONSTANTS ====================
 // NSB Daemon Mode: "PULL" or "PUSH"
-const std::string NSB_DAEMON_MODE = "PUSH";  // Change to "PULL" for polling mode
+const std::string NSB_DAEMON_MODE = "PULL";  // Change to "PULL" for polling mode
 
 const int DEFAULT_NUM_HOSTS = 10;
 const int TCP_PORT = 5000;
@@ -48,6 +48,7 @@ const int NODES_PER_ROW = 10;
 
 // ==================== GLOBAL STATE ====================
 std::shared_ptr<nsb::NSBSimClient> simClient;
+std::mutex simClientMutex;
 
 // Async listener state
 std::queue<nsb::MessageEntry> messageQueue;
@@ -90,18 +91,17 @@ void AsyncListenerThread() {
     
     while (listenerRunning) {
         try {
-            // In pull mode the daemon responds to fetch requests, so use the
-            // full daemon timeout there; in push mode we just block briefly.
             int fetchTimeout = (NSB_DAEMON_MODE == "PULL") ? DAEMON_RESPONSE_TIMEOUT
                                                            : ASYNC_FETCH_TIMEOUT_SEC;
-            // Use BLOCKING timeout - this prevents message loss and reduces CPU usage
-            nsb::MessageEntry entry = simClient->fetch(nullptr, fetchTimeout);
+            nsb::MessageEntry entry;
+            {
+                std::lock_guard<std::mutex> lock(simClientMutex);
+                entry = simClient->fetch(nullptr, fetchTimeout);
+            }
             
             if (entry.exists()) {
-                // std::lock_guard<std::mutex> lock(queueMutex);
+                std::lock_guard<std::mutex> lock(queueMutex);
                 messageQueue.push(entry);
-                // std::cout << "[ASYNC-LISTENER] Message queued (queue size: " 
-                //           << messageQueue.size() << ")" << std::endl;
             }
             // If no message after timeout, loop immediately continues - no gaps!
         } catch (const std::exception& e) {
@@ -175,6 +175,7 @@ void PollToFetch() {
     nsb::MessageEntry entry;
     
     try {
+        std::lock_guard<std::mutex> lock(simClientMutex);
         entry = simClient->fetch();
     } catch (const std::exception& e) {
         std::cerr << "[ERROR] Exception during fetch: " << e.what() << std::endl;
@@ -374,7 +375,10 @@ void TcpCloseCallback(Ptr<Socket> socket) {
               << buf.srcId << " to " << buf.destId << std::endl;
     
     try {
-        simClient->post(buf.srcId, buf.destId, buf.data);
+        {
+            std::lock_guard<std::mutex> lock(simClientMutex);
+            simClient->post(buf.srcId, buf.destId, buf.data);
+        }
         std::cout << "[POST] Successfully posted to NSB from " << buf.srcId 
                   << " to " << buf.destId << std::endl;
     } catch (const std::exception& e) {
