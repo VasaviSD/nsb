@@ -3,6 +3,7 @@
 *.dSYM
 *.DS_Store
 build/*
+cpp/rabbit/build/*
 */docs/
 __pycache__
 *_pb2.py
@@ -15,3 +16,4 @@ yaml-cpp
 install
 test
 python/nsb_client.egg-info/*
+.vscode

@@ -1,0 +1,23 @@
+Prereqs (macOS Homebrew examples):
+brew install rabbitmq-c
+brew install simple-amqp-client
+protobuf already present (using generated files at cpp/proto)
+
+Configure and build from repo root or from cpp/rabbit:
+mkdir -p cpp/rabbit/build && cd cpp/rabbit/build
+cmake ..
+make -j
+
+Binaries:
+example_send_recv
+example_daemon
+
+Run instructions
+Start RabbitMQ broker (already using it for Python)
+docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:4.1-management
+
+Start Python daemon (or C++ daemon):
+Python: rabbit/nsb_daemon.py (recommended, known working)
+C++ example daemon: ./example_daemon (if you want to test C++ daemon path)
+Run example:
+./example_send_recv
